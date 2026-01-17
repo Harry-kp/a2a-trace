@@ -230,7 +230,7 @@ func (m *Manager) SetupSignalHandling() {
 	go func() {
 		sig := <-sigChan
 		fmt.Printf("\n📍 Received signal %v, shutting down...\n", sig)
-		m.Stop()
+		_ = m.Stop()
 	}()
 }
 

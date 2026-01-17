@@ -13,7 +13,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/harry-kp/a2a-trace/internal/store"
@@ -27,16 +26,14 @@ type AgentHandler func(agent *store.Agent)
 
 // Proxy is an HTTP proxy that intercepts A2A traffic
 type Proxy struct {
-	server         *http.Server
-	interceptor    *Interceptor
-	store          *store.Store
-	traceID        string
-	port           int
-	onMessage      MessageHandler
-	onAgent        AgentHandler
-	pendingRequests sync.Map // map[requestID]*store.Message
-	client         *http.Client
-	mu             sync.RWMutex
+	server      *http.Server
+	interceptor *Interceptor
+	store       *store.Store
+	traceID     string
+	port        int
+	onMessage   MessageHandler
+	onAgent     AgentHandler
+	client      *http.Client
 }
 
 // Config holds proxy configuration
@@ -196,7 +193,7 @@ func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request) {
 				DurationMs: time.Since(startTime).Milliseconds(),
 				RequestID:  reqMsg.ID,
 			}
-			p.store.SaveMessage(errMsg)
+			_ = p.store.SaveMessage(errMsg)
 			if p.onMessage != nil {
 				p.onMessage(errMsg)
 			}
@@ -232,7 +229,7 @@ func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// Check if this is an agent card response
 		if strings.Contains(r.URL.Path, "/.well-known/agent.json") {
 			if agent := p.interceptor.ParseAgentCard(respBody, targetURL); agent != nil {
-				p.store.SaveAgent(agent)
+				_ = p.store.SaveAgent(agent)
 				if p.onAgent != nil {
 					p.onAgent(agent)
 				}

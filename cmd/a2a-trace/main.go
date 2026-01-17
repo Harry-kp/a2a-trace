@@ -230,12 +230,12 @@ func main() {
 		// Process exited naturally
 	case sig := <-sigChan:
 		fmt.Printf("\n📍 Received %v, shutting down...\n", sig)
-		procMgr.Stop()
+		_ = procMgr.Stop()
 		<-done
 	}
 
 	// Update trace status
-	dataStore.UpdateTraceStatus(trace.ID, "completed")
+	_ = dataStore.UpdateTraceStatus(trace.ID, "completed")
 
 	// Print summary
 	summary := analyzer.GetSummary()
@@ -251,9 +251,9 @@ func main() {
 	fmt.Println()
 
 	// Stop servers
-	proxyServer.Stop()
+	_ = proxyServer.Stop()
 	if cfg.UIPort != cfg.Port {
-		uiServer.Close()
+		_ = uiServer.Close()
 	}
 
 	os.Exit(exitCode)

@@ -1,0 +1,33 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+
+linters-settings:
+  errcheck:
+    # Don't check for errors on these function calls
+    exclude-functions:
+      - (io.Closer).Close
+      - (net/http.ResponseWriter).Write
+      - (*github.com/gorilla/websocket.Conn).WriteMessage
+      - (*github.com/gorilla/websocket.Conn).SetWriteDeadline
+      - (*github.com/gorilla/websocket.Conn).SetReadDeadline
+      - io.Copy
+
+issues:
+  exclude-rules:
+    # Ignore errcheck for deferred close calls
+    - linters:
+        - errcheck
+      source: "defer"
+    # Ignore unused fields in structs that might be used for future features
+    - linters:
+        - unused
+      path: internal/proxy/proxy.go
+      text: "field.*is unused"
+
