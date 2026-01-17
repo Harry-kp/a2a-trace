@@ -18,6 +18,19 @@ jobs:
         with:
           go-version: '1.22'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build UI (required for embed)
+        run: |
+          cd ui
+          npm ci
+          npm run build
+          mkdir -p ../cmd/a2a-trace/ui
+          cp -r out ../cmd/a2a-trace/ui/
+
       - name: Download dependencies
         run: go mod download
 
@@ -97,6 +110,19 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build UI (required for embed)
+        run: |
+          cd ui
+          npm ci
+          npm run build
+          mkdir -p ../cmd/a2a-trace/ui
+          cp -r out ../cmd/a2a-trace/ui/
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
