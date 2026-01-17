@@ -21,22 +21,20 @@ func NewInterceptor() *Interceptor {
 
 // IsA2ARequest checks if a request is an A2A protocol request
 func (i *Interceptor) IsA2ARequest(r *http.Request) bool {
-	// Check content type
-	contentType := r.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "application/json") {
-		return false
+	// GET to /.well-known/agent.json is A2A (check this first, before content-type)
+	if r.Method == "GET" && strings.Contains(r.URL.String(), "/.well-known/agent.json") {
+		return true
 	}
 
-	// A2A uses POST for JSON-RPC
-	if r.Method != "POST" {
-		// GET to /.well-known/agent.json is also A2A
-		if r.Method == "GET" && strings.Contains(r.URL.Path, "/.well-known/agent.json") {
+	// A2A uses POST for JSON-RPC with application/json
+	if r.Method == "POST" {
+		contentType := r.Header.Get("Content-Type")
+		if strings.Contains(contentType, "application/json") {
 			return true
 		}
-		return false
 	}
 
-	return true
+	return false
 }
 
 // ParseRequest parses an HTTP request into an A2A message

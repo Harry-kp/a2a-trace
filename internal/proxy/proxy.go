@@ -257,10 +257,14 @@ func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request) {
 			p.onMessage(respMsg)
 		}
 
-		// Check if this is an agent card response
-		if strings.Contains(r.URL.Path, "/.well-known/agent.json") {
+		// Check if this is an agent card response (check targetURL, not r.URL.Path)
+		if strings.Contains(targetURL, "/.well-known/agent.json") {
 			if agent := p.interceptor.ParseAgentCard(respBody, targetURL); agent != nil {
-				_ = p.store.SaveAgent(agent)
+				if err := p.store.SaveAgent(agent); err != nil {
+					log.Printf("Failed to save agent: %v", err)
+				} else {
+					log.Printf("Discovered agent: %s (%s)", agent.Name, agent.URL)
+				}
 				if p.onAgent != nil {
 					p.onAgent(agent)
 				}
