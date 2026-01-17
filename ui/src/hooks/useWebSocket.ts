@@ -15,11 +15,19 @@ interface UseWebSocketOptions {
 export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const optionsRef = useRef(options);
   const [isConnected, setIsConnected] = useState(false);
-  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const reconnectAttemptsRef = useRef(0);
+
+  // Keep options ref updated
+  useEffect(() => {
+    optionsRef.current = options;
+  }, [options]);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    // Prevent multiple connections
+    if (wsRef.current?.readyState === WebSocket.OPEN || 
+        wsRef.current?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
@@ -28,18 +36,30 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
 
       ws.onopen = () => {
         setIsConnected(true);
-        setReconnectAttempts(0);
-        options.onConnect?.();
+        reconnectAttemptsRef.current = 0;
+        optionsRef.current.onConnect?.();
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         setIsConnected(false);
-        options.onDisconnect?.();
+        wsRef.current = null;
+        optionsRef.current.onDisconnect?.();
 
-        // Reconnect with exponential backoff
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        // Don't reconnect if it was a clean close
+        if (event.code === 1000) {
+          return;
+        }
+
+        // Reconnect with exponential backoff (max 30s)
+        const attempts = reconnectAttemptsRef.current;
+        const delay = Math.min(1000 * Math.pow(2, attempts), 30000);
+        
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        
         reconnectTimeoutRef.current = setTimeout(() => {
-          setReconnectAttempts((prev) => prev + 1);
+          reconnectAttemptsRef.current += 1;
           connect();
         }, delay);
       };
@@ -54,16 +74,20 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
 
           switch (data.type) {
             case "message":
-              options.onMessage?.(data.payload as Message);
+              optionsRef.current.onMessage?.(data.payload as Message);
               break;
             case "agent":
-              options.onAgent?.(data.payload as Agent);
+              optionsRef.current.onAgent?.(data.payload as Agent);
               break;
             case "insight":
-              options.onInsight?.(data.payload as Insight);
+              optionsRef.current.onInsight?.(data.payload as Insight);
               break;
             case "trace_status":
-              options.onTraceStatus?.(data.payload as Trace);
+              optionsRef.current.onTraceStatus?.(data.payload as Trace);
+              break;
+            case "pong":
+            case "connected":
+              // Heartbeat/connection confirmation
               break;
           }
         } catch (error) {
@@ -75,7 +99,7 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
     } catch (error) {
       console.error("Failed to connect WebSocket:", error);
     }
-  }, [url, options, reconnectAttempts]);
+  }, [url]); // Only depend on url
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current !== null) {
@@ -83,7 +107,7 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
       reconnectTimeoutRef.current = null;
     }
     if (wsRef.current) {
-      wsRef.current.close();
+      wsRef.current.close(1000, "Client disconnect");
       wsRef.current = null;
     }
   }, []);
@@ -94,10 +118,11 @@ export function useWebSocket(url: string, options: UseWebSocketOptions = {}) {
     }
   }, []);
 
+  // Connect on mount, disconnect on unmount
   useEffect(() => {
     connect();
     return () => disconnect();
-  }, [connect, disconnect]);
+  }, [url]); // Only reconnect if url changes
 
   return {
     isConnected,

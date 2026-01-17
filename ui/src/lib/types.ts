@@ -58,8 +58,8 @@ export interface Summary {
 }
 
 export interface WebSocketMessage {
-  type: "message" | "agent" | "insight" | "trace_status";
-  payload: Message | Agent | Insight | Trace;
+  type: "message" | "agent" | "insight" | "trace_status" | "pong" | "connected";
+  payload: Message | Agent | Insight | Trace | null;
 }
 
 // Parsed versions of JSON fields

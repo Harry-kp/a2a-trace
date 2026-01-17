@@ -158,6 +158,10 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	h.register <- client
 
+	// Send initial connection confirmation
+	welcome := []byte(`{"type":"connected","payload":null}`)
+	client.send <- welcome
+
 	// Start goroutines for reading and writing
 	go client.writePump()
 	go client.readPump()
@@ -171,17 +175,23 @@ func (c *Client) readPump() {
 	}()
 
 	c.conn.SetReadLimit(512 * 1024) // 512KB max message size
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	// Use a longer deadline - 5 minutes
+	c.conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		c.conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		return nil
 	})
 
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error: %v", err)
+			// Only log unexpected close errors, not normal closes
+			if websocket.IsUnexpectedCloseError(err, 
+				websocket.CloseGoingAway, 
+				websocket.CloseAbnormalClosure,
+				websocket.CloseNormalClosure,
+				websocket.CloseNoStatusReceived) {
+				log.Printf("WebSocket read error: %v", err)
 			}
 			break
 		}
