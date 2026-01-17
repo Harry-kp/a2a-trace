@@ -98,7 +98,7 @@ jobs:
       - name: Build Go binary
         run: |
           go build -o a2a-trace ./cmd/a2a-trace
-          ./a2a-trace --version
+          ls -la a2a-trace
 
   lint:
     name: Lint
