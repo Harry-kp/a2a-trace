@@ -1,0 +1,53 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+go.work
+go.work.sum
+
+# UI build artifacts
+ui/out/
+ui/.next/
+ui/node_modules/
+
+# Embedded UI (generated at build time)
+cmd/a2a-trace/ui/out/
+
+# Dependencies
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage.out
+*.prof
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+

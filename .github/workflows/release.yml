@@ -1,0 +1,206 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-latest
+          - os: linux
+            arch: arm64
+            runner: ubuntu-latest
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+          - os: windows
+            arch: amd64
+            runner: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build UI
+        run: |
+          cd ui
+          npm ci
+          npm run build
+
+      - name: Prepare UI for embedding
+        shell: bash
+        run: |
+          mkdir -p cmd/a2a-trace/ui
+          cp -r ui/out cmd/a2a-trace/ui/
+
+      - name: Build binary
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          COMMIT=${{ github.sha }}
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          LDFLAGS="-s -w"
+          LDFLAGS="$LDFLAGS -X github.com/harry-kp/a2a-trace/internal/cli.Version=$VERSION"
+          LDFLAGS="$LDFLAGS -X github.com/harry-kp/a2a-trace/internal/cli.Commit=${COMMIT:0:7}"
+          LDFLAGS="$LDFLAGS -X github.com/harry-kp/a2a-trace/internal/cli.BuildDate=$BUILD_DATE"
+          
+          OUTPUT="a2a-trace-${{ matrix.os }}-${{ matrix.arch }}"
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            OUTPUT="${OUTPUT}.exe"
+          fi
+          
+          go build -ldflags="$LDFLAGS" -o "$OUTPUT" ./cmd/a2a-trace
+          
+          # Create archive
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            7z a "a2a-trace-${{ matrix.os }}-${{ matrix.arch }}.zip" "$OUTPUT"
+          else
+            tar -czf "a2a-trace-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" "$OUTPUT"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: a2a-trace-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: A2A Trace ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+          body: |
+            ## Installation
+            
+            ### macOS (Apple Silicon)
+            ```bash
+            curl -L https://github.com/harry-kp/a2a-trace/releases/download/${{ steps.version.outputs.version }}/a2a-trace-darwin-arm64.tar.gz | tar xz
+            sudo mv a2a-trace-darwin-arm64 /usr/local/bin/a2a-trace
+            ```
+            
+            ### macOS (Intel)
+            ```bash
+            curl -L https://github.com/harry-kp/a2a-trace/releases/download/${{ steps.version.outputs.version }}/a2a-trace-darwin-amd64.tar.gz | tar xz
+            sudo mv a2a-trace-darwin-amd64 /usr/local/bin/a2a-trace
+            ```
+            
+            ### Linux (x86_64)
+            ```bash
+            curl -L https://github.com/harry-kp/a2a-trace/releases/download/${{ steps.version.outputs.version }}/a2a-trace-linux-amd64.tar.gz | tar xz
+            sudo mv a2a-trace-linux-amd64 /usr/local/bin/a2a-trace
+            ```
+            
+            ### Go Install
+            ```bash
+            go install github.com/harry-kp/a2a-trace/cmd/a2a-trace@${{ steps.version.outputs.version }}
+            ```
+            
+            ## Usage
+            ```bash
+            a2a-trace -- node my-agent.js
+            ```
+            
+            Open http://localhost:8080/ui to view the trace UI.
+
+  homebrew:
+    name: Update Homebrew
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref, '-') }}  # Skip prereleases
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Trigger Homebrew tap update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: harry-kp/homebrew-tap
+          event-type: update-formula
+          client-payload: '{"formula": "a2a-trace", "version": "${{ steps.version.outputs.version }}"}'
+        continue-on-error: true  # Don't fail if tap doesn't exist yet
+
