@@ -66,21 +66,29 @@ func main() {
 		},
 	})
 
-	// Set up HTTP server with UI and WebSocket
-	mux := http.NewServeMux()
-
-	// Determine if we need to share the mux with proxy
-	var additionalMux *http.ServeMux
-	if cfg.UIPort == cfg.Port && !cfg.NoUI {
-		additionalMux = mux
+	// Set up UI handler
+	var uiHandler http.Handler
+	if !cfg.NoUI {
+		uiContent, err := fs.Sub(uiFS, "ui/out")
+		if err != nil {
+			// UI not embedded, serve placeholder
+			uiHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/html")
+				w.Write([]byte(placeholderHTML))
+			})
+		} else {
+			uiHandler = http.FileServer(http.FS(uiContent))
+		}
 	}
 
-	// Initialize proxy
+	// Initialize proxy with all handlers
 	proxyServer := proxy.New(proxy.Config{
-		Port:          cfg.Port,
-		Store:         dataStore,
-		TraceID:       trace.ID,
-		AdditionalMux: additionalMux,
+		Port:            cfg.Port,
+		Store:           dataStore,
+		TraceID:         trace.ID,
+		WSHandler:       wsHub.HandleWebSocket,
+		UIHandler:       uiHandler,
+		SummaryProvider: analyzer,
 		OnMessage: func(msg *store.Message) {
 			wsHub.BroadcastMessage(msg)
 			analyzer.AnalyzeMessage(msg)
@@ -96,75 +104,57 @@ func main() {
 		},
 	})
 
-	// WebSocket endpoint
-	mux.HandleFunc("/ws", wsHub.HandleWebSocket)
-
-	// API endpoints
-	mux.HandleFunc("/api/messages", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		messages, _ := dataStore.GetMessages(trace.ID)
-		writeJSON(w, messages)
-	})
-	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		agents, _ := dataStore.GetAgents()
-		writeJSON(w, agents)
-	})
-	mux.HandleFunc("/api/trace", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		t, _ := dataStore.GetTrace(trace.ID)
-		writeJSON(w, t)
-	})
-	mux.HandleFunc("/api/insights", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		insights, _ := dataStore.GetInsights(trace.ID)
-		writeJSON(w, insights)
-	})
-	mux.HandleFunc("/api/summary", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		summary := analyzer.GetSummary()
-		writeJSON(w, summary)
-	})
-	mux.HandleFunc("/api/export", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w)
-		data, _ := dataStore.ExportTrace(trace.ID)
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=trace-%s.json", trace.ID))
-		w.Write(data)
-	})
-
-	// Serve embedded UI
-	if !cfg.NoUI {
-		uiContent, err := fs.Sub(uiFS, "ui/out")
-		if err != nil {
-			// UI not embedded, serve placeholder
-			mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "text/html")
-				w.Write([]byte(placeholderHTML))
-			})
-			mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "text/html")
-				w.Write([]byte(placeholderHTML))
-			})
-		} else {
-			fileServer := http.FileServer(http.FS(uiContent))
-			mux.Handle("/ui/", http.StripPrefix("/ui/", fileServer))
+	// Separate UI server (only used when UI port differs from proxy port)
+	var uiServer *http.Server
+	if cfg.UIPort != cfg.Port && !cfg.NoUI {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/ws", wsHub.HandleWebSocket)
+		mux.HandleFunc("/api/messages", func(w http.ResponseWriter, r *http.Request) {
+			setCORS(w)
+			messages, _ := dataStore.GetMessages(trace.ID)
+			writeJSON(w, messages)
+		})
+		mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
+			setCORS(w)
+			agents, _ := dataStore.GetAgents()
+			writeJSON(w, agents)
+		})
+		mux.HandleFunc("/api/trace", func(w http.ResponseWriter, r *http.Request) {
+			setCORS(w)
+			t, _ := dataStore.GetTrace(trace.ID)
+			writeJSON(w, t)
+		})
+		mux.HandleFunc("/api/insights", func(w http.ResponseWriter, r *http.Request) {
+			setCORS(w)
+			insights, _ := dataStore.GetInsights(trace.ID)
+			writeJSON(w, insights)
+		})
+		mux.HandleFunc("/api/summary", func(w http.ResponseWriter, r *http.Request) {
+			setCORS(w)
+			summary := analyzer.GetSummary()
+			writeJSON(w, summary)
+		})
+		mux.HandleFunc("/api/export", func(w http.ResponseWriter, r *http.Request) {
+			setCORS(w)
+			data, _ := dataStore.ExportTrace(trace.ID)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=trace-%s.json", trace.ID))
+			w.Write(data)
+		})
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		})
+		if uiHandler != nil {
+			mux.Handle("/ui/", http.StripPrefix("/ui/", uiHandler))
 			mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
 			})
 		}
-	}
-
-	// Health check
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
-
-	// Start HTTP server for UI
-	uiServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.UIPort),
-		Handler: mux,
+		uiServer = &http.Server{
+			Addr:    fmt.Sprintf(":%d", cfg.UIPort),
+			Handler: mux,
+		}
 	}
 
 	var wg sync.WaitGroup

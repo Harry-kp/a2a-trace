@@ -24,17 +24,29 @@ type MessageHandler func(msg *store.Message)
 // AgentHandler is called when an agent is discovered
 type AgentHandler func(agent *store.Agent)
 
+// SummaryProvider provides trace summary data
+type SummaryProvider interface {
+	GetSummary() map[string]interface{}
+}
+
+// InsightsProvider provides insights data
+type InsightsProvider interface {
+	GetInsights(traceID string) ([]*store.Insight, error)
+}
+
 // Proxy is an HTTP proxy that intercepts A2A traffic
 type Proxy struct {
-	server        *http.Server
-	interceptor   *Interceptor
-	store         *store.Store
-	traceID       string
-	port          int
-	onMessage     MessageHandler
-	onAgent       AgentHandler
-	client        *http.Client
-	additionalMux *http.ServeMux
+	server          *http.Server
+	interceptor     *Interceptor
+	store           *store.Store
+	traceID         string
+	port            int
+	onMessage       MessageHandler
+	onAgent         AgentHandler
+	client          *http.Client
+	wsHandler       http.HandlerFunc
+	uiHandler       http.Handler
+	summaryProvider SummaryProvider
 }
 
 // Config holds proxy configuration
@@ -44,7 +56,9 @@ type Config struct {
 	TraceID         string
 	OnMessage       MessageHandler
 	OnAgent         AgentHandler
-	AdditionalMux   *http.ServeMux // Optional: additional handlers to mount
+	WSHandler       http.HandlerFunc  // WebSocket handler
+	UIHandler       http.Handler      // UI file server
+	SummaryProvider SummaryProvider   // For /api/summary
 }
 
 // New creates a new Proxy instance
@@ -64,13 +78,15 @@ func New(cfg Config) *Proxy {
 	}
 
 	return &Proxy{
-		interceptor:   NewInterceptor(),
-		store:         cfg.Store,
-		traceID:       cfg.TraceID,
-		port:          cfg.Port,
-		onMessage:     cfg.OnMessage,
-		onAgent:       cfg.OnAgent,
-		additionalMux: cfg.AdditionalMux,
+		interceptor:     NewInterceptor(),
+		store:           cfg.Store,
+		traceID:         cfg.TraceID,
+		port:            cfg.Port,
+		onMessage:       cfg.OnMessage,
+		onAgent:         cfg.OnAgent,
+		wsHandler:       cfg.WSHandler,
+		uiHandler:       cfg.UIHandler,
+		summaryProvider: cfg.SummaryProvider,
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   60 * time.Second,
@@ -93,12 +109,20 @@ func (p *Proxy) Start() error {
 	mux.HandleFunc("/api/agents", p.handleGetAgents)
 	mux.HandleFunc("/api/trace", p.handleGetTrace)
 	mux.HandleFunc("/api/export", p.handleExport)
+	mux.HandleFunc("/api/insights", p.handleGetInsights)
+	mux.HandleFunc("/api/summary", p.handleGetSummary)
 
-	// Mount additional handlers if provided (for UI)
-	if p.additionalMux != nil {
-		mux.Handle("/ws", p.additionalMux)
-		mux.Handle("/ui", p.additionalMux)
-		mux.Handle("/ui/", p.additionalMux)
+	// WebSocket handler
+	if p.wsHandler != nil {
+		mux.HandleFunc("/ws", p.wsHandler)
+	}
+
+	// UI handler
+	if p.uiHandler != nil {
+		mux.Handle("/ui/", http.StripPrefix("/ui/", p.uiHandler))
+		mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+		})
 	}
 
 	// Create combined handler - serve known routes via mux, proxy everything else
@@ -115,7 +139,7 @@ func (p *Proxy) Start() error {
 		switch {
 		case path == "/health",
 		     strings.HasPrefix(path, "/api/"),
-		     strings.HasPrefix(path, "/ws"),
+		     path == "/ws",
 		     strings.HasPrefix(path, "/ui"):
 			mux.ServeHTTP(w, r)
 		default:
@@ -387,6 +411,41 @@ func (p *Proxy) handleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=trace-%s.json", p.traceID))
 	w.Write(data)
+}
+
+func (p *Proxy) handleGetInsights(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	insights, err := p.store.GetInsights(p.traceID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json, _ := json.Marshal(insights)
+	w.Write(json)
+}
+
+func (p *Proxy) handleGetSummary(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	if p.summaryProvider == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+		return
+	}
+
+	summary := p.summaryProvider.GetSummary()
+	w.Header().Set("Content-Type", "application/json")
+	json, _ := json.Marshal(summary)
+	w.Write(json)
 }
 
 func setCORSHeaders(w http.ResponseWriter) {
