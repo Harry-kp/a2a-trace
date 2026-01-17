@@ -216,4 +216,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    print("\n" + "="*60)
+    print("🔍 UI is live at http://localhost:8080/ui")
+    print("="*60)
+    print("\nPress Ctrl+C to stop and view the final summary...")
+    
+    try:
+        # Keep alive so user can explore the UI
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n\nStopping...")
 
