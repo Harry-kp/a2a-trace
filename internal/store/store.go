@@ -38,63 +38,63 @@ func New(dbPath string) (*Store, error) {
 
 // migrate creates the database schema
 func (s *Store) migrate() error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS traces (
-		id TEXT PRIMARY KEY,
-		started_at TIMESTAMP NOT NULL,
-		command TEXT NOT NULL,
-		status TEXT NOT NULL DEFAULT 'running'
-	);
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS traces (
+			id TEXT PRIMARY KEY,
+			started_at TIMESTAMP NOT NULL,
+			command TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'running'
+		)`,
+		`CREATE TABLE IF NOT EXISTS messages (
+			id TEXT PRIMARY KEY,
+			trace_id TEXT NOT NULL,
+			timestamp TIMESTAMP NOT NULL,
+			direction TEXT NOT NULL,
+			from_agent TEXT,
+			to_agent TEXT,
+			method TEXT,
+			url TEXT,
+			headers TEXT,
+			body TEXT,
+			duration_ms INTEGER DEFAULT 0,
+			status_code INTEGER DEFAULT 0,
+			error TEXT,
+			request_id TEXT,
+			content_type TEXT,
+			size INTEGER DEFAULT 0,
+			FOREIGN KEY (trace_id) REFERENCES traces(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY,
+			url TEXT UNIQUE NOT NULL,
+			name TEXT,
+			description TEXT,
+			version TEXT,
+			skills TEXT,
+			first_seen TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS insights (
+			id TEXT PRIMARY KEY,
+			trace_id TEXT NOT NULL,
+			message_id TEXT,
+			type TEXT NOT NULL,
+			category TEXT NOT NULL,
+			title TEXT NOT NULL,
+			details TEXT,
+			timestamp TIMESTAMP NOT NULL,
+			FOREIGN KEY (trace_id) REFERENCES traces(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON messages(trace_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_insights_trace_id ON insights(trace_id)`,
+	}
 
-	CREATE TABLE IF NOT EXISTS messages (
-		id TEXT PRIMARY KEY,
-		trace_id TEXT NOT NULL,
-		timestamp TIMESTAMP NOT NULL,
-		direction TEXT NOT NULL,
-		from_agent TEXT,
-		to_agent TEXT,
-		method TEXT,
-		url TEXT,
-		headers TEXT,
-		body TEXT,
-		duration_ms INTEGER DEFAULT 0,
-		status_code INTEGER DEFAULT 0,
-		error TEXT,
-		request_id TEXT,
-		content_type TEXT,
-		size INTEGER DEFAULT 0,
-		FOREIGN KEY (trace_id) REFERENCES traces(id)
-	);
-
-	CREATE TABLE IF NOT EXISTS agents (
-		id TEXT PRIMARY KEY,
-		url TEXT UNIQUE NOT NULL,
-		name TEXT,
-		description TEXT,
-		version TEXT,
-		skills TEXT,
-		first_seen TIMESTAMP NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS insights (
-		id TEXT PRIMARY KEY,
-		trace_id TEXT NOT NULL,
-		message_id TEXT,
-		type TEXT NOT NULL,
-		category TEXT NOT NULL,
-		title TEXT NOT NULL,
-		details TEXT,
-		timestamp TIMESTAMP NOT NULL,
-		FOREIGN KEY (trace_id) REFERENCES traces(id)
-	);
-
-	CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON messages(trace_id);
-	CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-	CREATE INDEX IF NOT EXISTS idx_insights_trace_id ON insights(trace_id);
-	`
-
-	_, err := s.db.Exec(schema)
-	return err
+	for _, stmt := range statements {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("migration failed on statement: %w", err)
+		}
+	}
+	return nil
 }
 
 // CreateTrace creates a new trace session
