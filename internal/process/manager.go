@@ -110,6 +110,9 @@ func (m *Manager) buildEnv() []string {
 		"http_proxy":  proxyURL,
 		"HTTPS_PROXY": proxyURL,
 		"https_proxy": proxyURL,
+		// Force proxy for localhost (many clients skip localhost by default)
+		"NO_PROXY":  "",
+		"no_proxy":  "",
 		// A2A specific - some implementations use these
 		"A2A_PROXY":    proxyURL,
 		"A2A_TRACE":    "1",

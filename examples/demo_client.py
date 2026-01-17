@@ -9,14 +9,44 @@ Use with a2a-trace to visualize the agent interactions:
 import json
 import urllib.request
 import urllib.error
+import http.client
 import time
 import sys
 import os
+from urllib.parse import urlparse
 
 # Agent URLs
 ECHO_AGENT = os.environ.get("ECHO_AGENT_URL", "http://localhost:8001")
 WEATHER_AGENT = os.environ.get("WEATHER_AGENT_URL", "http://localhost:8002")
 ORCHESTRATOR_AGENT = os.environ.get("ORCHESTRATOR_AGENT_URL", "http://localhost:8003")
+
+# Get proxy URL
+PROXY_URL = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+
+
+def make_proxied_request(url, data=None, headers=None, timeout=30):
+    """Make HTTP request through proxy (works with localhost)."""
+    headers = headers or {}
+    parsed = urlparse(url)
+    
+    if PROXY_URL:
+        proxy_parsed = urlparse(PROXY_URL)
+        conn = http.client.HTTPConnection(proxy_parsed.hostname, proxy_parsed.port, timeout=timeout)
+        # For HTTP proxy, send full URL as path
+        # Ensure path ends with / to avoid 301 redirect from Go's HTTP server
+        path = url if parsed.path else url + "/"
+    else:
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
+        path = parsed.path or "/"
+    
+    try:
+        method = "POST" if data else "GET"
+        conn.request(method, path, body=data, headers=headers)
+        response = conn.getresponse()
+        body = response.read().decode()
+        return response.status, body
+    finally:
+        conn.close()
 
 
 def call_agent(agent_url, method, params):
@@ -32,38 +62,35 @@ def call_agent(agent_url, method, params):
     print(f"   Method: {method}")
     print(f"   Params: {json.dumps(params)}")
     
-    data = json.dumps(request_data).encode()
-    req = urllib.request.Request(
-        agent_url,
-        data=data,
-        headers={"Content-Type": "application/json"}
-    )
+    data = json.dumps(request_data)
+    headers = {"Content-Type": "application/json"}
     
     try:
         start = time.time()
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode())
-            elapsed = (time.time() - start) * 1000
+        status, response_body = make_proxied_request(agent_url, data, headers)
+        elapsed = (time.time() - start) * 1000
+        
+        if status >= 400:
+            print(f"   ❌ HTTP Error {status}")
+            return None
             
-            print(f"📥 Response ({elapsed:.0f}ms)")
-            
-            if "result" in result:
-                print(f"   ✅ Success")
-                # Print key parts of result
-                task_result = result["result"]
-                if isinstance(task_result, dict):
-                    if "result" in task_result:
-                        inner = task_result["result"]
-                        if isinstance(inner, dict):
-                            for key, value in list(inner.items())[:3]:
-                                print(f"   {key}: {json.dumps(value)[:50]}")
-            else:
-                print(f"   ❌ Error: {result.get('error', {}).get('message', 'Unknown')}")
-            
-            return result
-    except urllib.error.URLError as e:
-        print(f"   ❌ Connection error: {e}")
-        return None
+        result = json.loads(response_body)
+        print(f"📥 Response ({elapsed:.0f}ms)")
+        
+        if "result" in result:
+            print(f"   ✅ Success")
+            # Print key parts of result
+            task_result = result["result"]
+            if isinstance(task_result, dict):
+                if "result" in task_result:
+                    inner = task_result["result"]
+                    if isinstance(inner, dict):
+                        for key, value in list(inner.items())[:3]:
+                            print(f"   {key}: {json.dumps(value)[:50]}")
+        else:
+            print(f"   ❌ Error: {result.get('error', {}).get('message', 'Unknown')}")
+        
+        return result
     except Exception as e:
         print(f"   ❌ Error: {e}")
         return None
