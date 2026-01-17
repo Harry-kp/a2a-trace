@@ -148,6 +148,50 @@ a2a-trace --no-ui -- ./agent
 
 ---
 
+## Demos
+
+### 🏢 Expense Reimbursement Workflow (Recommended)
+
+A realistic enterprise workflow with 4 agents processing expense reports:
+
+```bash
+# Start the agent network
+cd examples/expense_workflow && ./run_demo.sh
+
+# In another terminal - trace the workflow
+./bin/a2a-trace -- python3 examples/expense_workflow/run_client.py
+```
+
+Open **http://localhost:8080/ui** to see 13+ request/response pairs across:
+- **Receipt Analyzer** - OCR and data extraction
+- **Policy Checker** - Compliance validation
+- **Approval Workflow** - Routing and status tracking
+- **Expense Orchestrator** - Workflow coordination
+
+📖 [See examples/expense_workflow/README.md](examples/expense_workflow/README.md)
+
+### 🔬 Using with Google ADK
+
+A2A Trace works with Google's official [Agent Development Kit](https://github.com/google/adk-python):
+
+```bash
+# Install Google ADK
+pip install google-adk
+
+# Start the A2A sample agents
+adk api_server --a2a --port 8001 contributing/samples/a2a_basic/remote_a2a
+
+# In another terminal, trace your root agent
+a2a-trace -- adk web contributing/samples/a2a_basic
+```
+
+Supports any ADK sample:
+- `a2a_basic` - Dice rolling + prime checking
+- `a2a_human_in_loop` - Human approval workflows
+- `a2a_auth` - Authenticated agent communication
+
+---
+
 ## API Endpoints
 
 The trace server exposes REST endpoints:
