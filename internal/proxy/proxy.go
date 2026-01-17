@@ -26,23 +26,25 @@ type AgentHandler func(agent *store.Agent)
 
 // Proxy is an HTTP proxy that intercepts A2A traffic
 type Proxy struct {
-	server      *http.Server
-	interceptor *Interceptor
-	store       *store.Store
-	traceID     string
-	port        int
-	onMessage   MessageHandler
-	onAgent     AgentHandler
-	client      *http.Client
+	server        *http.Server
+	interceptor   *Interceptor
+	store         *store.Store
+	traceID       string
+	port          int
+	onMessage     MessageHandler
+	onAgent       AgentHandler
+	client        *http.Client
+	additionalMux *http.ServeMux
 }
 
 // Config holds proxy configuration
 type Config struct {
-	Port       int
-	Store      *store.Store
-	TraceID    string
-	OnMessage  MessageHandler
-	OnAgent    AgentHandler
+	Port            int
+	Store           *store.Store
+	TraceID         string
+	OnMessage       MessageHandler
+	OnAgent         AgentHandler
+	AdditionalMux   *http.ServeMux // Optional: additional handlers to mount
 }
 
 // New creates a new Proxy instance
@@ -62,12 +64,13 @@ func New(cfg Config) *Proxy {
 	}
 
 	return &Proxy{
-		interceptor: NewInterceptor(),
-		store:       cfg.Store,
-		traceID:     cfg.TraceID,
-		port:        cfg.Port,
-		onMessage:   cfg.OnMessage,
-		onAgent:     cfg.OnAgent,
+		interceptor:   NewInterceptor(),
+		store:         cfg.Store,
+		traceID:       cfg.TraceID,
+		port:          cfg.Port,
+		onMessage:     cfg.OnMessage,
+		onAgent:       cfg.OnAgent,
+		additionalMux: cfg.AdditionalMux,
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   60 * time.Second,
@@ -91,12 +94,40 @@ func (p *Proxy) Start() error {
 	mux.HandleFunc("/api/trace", p.handleGetTrace)
 	mux.HandleFunc("/api/export", p.handleExport)
 
-	// Proxy all other requests
-	mux.HandleFunc("/", p.handleProxy)
+	// Mount additional handlers if provided (for UI)
+	if p.additionalMux != nil {
+		mux.Handle("/ws", p.additionalMux)
+		mux.Handle("/ui", p.additionalMux)
+		mux.Handle("/ui/", p.additionalMux)
+	}
+
+	// Create combined handler - serve known routes via mux, proxy everything else
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is a proxy request (has absolute URL with host)
+		if r.URL.Host != "" {
+			// This is a proxy request - forward it
+			p.handleProxy(w, r)
+			return
+		}
+		
+		// For local requests, check known paths
+		path := r.URL.Path
+		switch {
+		case path == "/health",
+		     strings.HasPrefix(path, "/api/"),
+		     strings.HasPrefix(path, "/ws"),
+		     strings.HasPrefix(path, "/ui"):
+			mux.ServeHTTP(w, r)
+		default:
+			// Unknown local path - could be a misconfigured proxy request
+			// Try to proxy it using Host header
+			p.handleProxy(w, r)
+		}
+	})
 
 	p.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", p.port),
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -254,6 +285,12 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// For HTTPS, we just tunnel without intercepting
 	// (intercepting HTTPS requires certificate setup)
 	
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+	
 	destConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -262,15 +299,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
-		return
-	}
-	
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		destConn.Close() // Close destConn on hijack failure
 		return
 	}
 

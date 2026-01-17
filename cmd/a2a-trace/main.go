@@ -66,11 +66,21 @@ func main() {
 		},
 	})
 
+	// Set up HTTP server with UI and WebSocket
+	mux := http.NewServeMux()
+
+	// Determine if we need to share the mux with proxy
+	var additionalMux *http.ServeMux
+	if cfg.UIPort == cfg.Port && !cfg.NoUI {
+		additionalMux = mux
+	}
+
 	// Initialize proxy
 	proxyServer := proxy.New(proxy.Config{
-		Port:    cfg.Port,
-		Store:   dataStore,
-		TraceID: trace.ID,
+		Port:          cfg.Port,
+		Store:         dataStore,
+		TraceID:       trace.ID,
+		AdditionalMux: additionalMux,
 		OnMessage: func(msg *store.Message) {
 			wsHub.BroadcastMessage(msg)
 			analyzer.AnalyzeMessage(msg)
@@ -85,9 +95,6 @@ func main() {
 			}
 		},
 	})
-
-	// Set up HTTP server with UI and WebSocket
-	mux := http.NewServeMux()
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", wsHub.HandleWebSocket)
